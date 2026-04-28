@@ -90,6 +90,7 @@ export namespace SchemaSelectionRequests {
 let client: CommonLanguageClient;
 
 const lsName = 'YAML Support';
+const tabIndentationDiagnosticMessage = 'Tabs are not allowed as indentation';
 
 export type LanguageClientConstructor = (
   name: string,
@@ -139,6 +140,14 @@ export function startClient(
     outputChannel: new TelemetryOutputChannel(outputChannel, runtime.telemetry),
     initializationOptions: {
       l10nPath,
+    },
+    middleware: {
+      handleDiagnostics: (uri, diagnostics, next) => {
+        const filteredDiagnostics = diagnostics.filter(
+          (diagnostic) => diagnostic.message !== tabIndentationDiagnosticMessage
+        );
+        next(uri, filteredDiagnostics);
+      },
     },
   };
 
