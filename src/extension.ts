@@ -9,12 +9,17 @@
 import { workspace, ExtensionContext, extensions, window, commands, Uri } from 'vscode';
 import {
   CommonLanguageClient,
+  DidChangeTextDocumentNotification,
+  DidOpenTextDocumentNotification,
+  DidSaveTextDocumentNotification,
   LanguageClientOptions,
+  Middleware,
   NotificationType,
   RequestType,
   RevealOutputChannelOn,
 } from 'vscode-languageclient';
 import { CUSTOM_SCHEMA_REQUEST, CUSTOM_CONTENT_REQUEST, SchemaExtensionAPI } from './schema-extension-api';
+import { convertLeadingTabs } from './tabConverter';
 import { joinPath } from './paths';
 import { getJsonSchemaContent, IJSONSchemaCache, JSONSchemaDocumentContentProvider } from './json-schema-content-provider';
 import { getConflictingExtensions, showUninstallConflictsNotification } from './extensionConflicts';
@@ -115,6 +120,40 @@ export function startClient(
   const telemetryErrorHandler = new TelemetryErrorHandler(runtime.telemetry, lsName, 4);
   const outputChannel = window.createOutputChannel(lsName);
   const l10nPath = context.asAbsolutePath('./dist/l10n');
+
+  // Replace leading-indentation tabs with spaces on every text-sync message so
+  // the server only ever sees tab-free YAML. The on-disk file is left alone;
+  // tabs in non-indentation positions (e.g. inside strings) are preserved.
+  // Substitution is 1:1 in characters so LSP positions remain valid both ways.
+  const tabConvertingMiddleware: Middleware = {
+    didOpen: async (document) => {
+      await client.sendNotification(DidOpenTextDocumentNotification.type, {
+        textDocument: {
+          uri: client.code2ProtocolConverter.asUri(document.uri),
+          languageId: document.languageId,
+          version: document.version,
+          text: convertLeadingTabs(document.getText()),
+        },
+      });
+    },
+    didChange: async (event) => {
+      const document = event.document;
+      await client.sendNotification(DidChangeTextDocumentNotification.type, {
+        textDocument: {
+          uri: client.code2ProtocolConverter.asUri(document.uri),
+          version: document.version,
+        },
+        contentChanges: [{ text: convertLeadingTabs(document.getText()) }],
+      });
+    },
+    didSave: async (document) => {
+      await client.sendNotification(DidSaveTextDocumentNotification.type, {
+        textDocument: { uri: client.code2ProtocolConverter.asUri(document.uri) },
+        text: convertLeadingTabs(document.getText()),
+      });
+    },
+  };
+
   // Options to control the language client
   const clientOptions: LanguageClientOptions = {
     // Register the server for on disk and newly created YAML documents
@@ -137,6 +176,7 @@ export function startClient(
     revealOutputChannelOn: RevealOutputChannelOn.Never,
     errorHandler: telemetryErrorHandler,
     outputChannel: new TelemetryOutputChannel(outputChannel, runtime.telemetry),
+    middleware: tabConvertingMiddleware,
     initializationOptions: {
       l10nPath,
     },
