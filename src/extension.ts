@@ -107,6 +107,10 @@ export interface TelemetryService {
   sendStartupEvent(): Promise<void>;
 }
 
+function normalizeLeadingIndentation(text: string): string {
+  return text.replace(/^[ \t]+/gm, (indentation) => indentation.replace(/\t/g, ' '));
+}
+
 export function startClient(
   context: ExtensionContext,
   newLanguageClient: LanguageClientConstructor,
@@ -139,6 +143,30 @@ export function startClient(
     outputChannel: new TelemetryOutputChannel(outputChannel, runtime.telemetry),
     initializationOptions: {
       l10nPath,
+    },
+    middleware: {
+      didOpen: (document, next) => {
+        const textDocument = {
+          ...document,
+          getText: (range) => normalizeLeadingIndentation(document.getText(range)),
+        };
+        next(textDocument as typeof document);
+      },
+      didChange: (event, next) => {
+        const changeEvent = {
+          ...event,
+          contentChanges: event.contentChanges.map((change) => {
+            if (!('text' in change)) {
+              return change;
+            }
+            return {
+              ...change,
+              text: normalizeLeadingIndentation(change.text),
+            };
+          }),
+        };
+        next(changeEvent as typeof event);
+      },
     },
   };
 
