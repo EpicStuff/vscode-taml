@@ -21,6 +21,7 @@ import { getConflictingExtensions, showUninstallConflictsNotification } from './
 import { TelemetryErrorHandler, TelemetryOutputChannel } from './telemetry';
 import { createJSONSchemaStatusBarItem } from './schema-status-bar-item';
 import { initializeRecommendation } from './recommendation';
+import { normalizeContentChangeEvent, normalizeLeadingTabs } from './tab-indentation-normalizer';
 
 export interface ISchemaAssociations {
   [pattern: string]: string[];
@@ -139,6 +140,23 @@ export function startClient(
     outputChannel: new TelemetryOutputChannel(outputChannel, runtime.telemetry),
     initializationOptions: {
       l10nPath,
+    },
+    middleware: {
+      didOpen: (document, next) => {
+        const sanitizedDocument = Object.create(document, {
+          getText: {
+            value: () => normalizeLeadingTabs(document.getText()),
+          },
+        });
+        next(sanitizedDocument);
+      },
+      didChange: (event, next) => {
+        next({
+          document: event.document,
+          contentChanges: event.contentChanges.map(normalizeContentChangeEvent),
+          reason: event.reason,
+        });
+      },
     },
   };
 
