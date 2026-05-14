@@ -6,7 +6,7 @@
  *--------------------------------------------------------------------------------------------*/
 'use strict';
 
-import { workspace, ExtensionContext, extensions, window, commands, Uri } from 'vscode';
+import { workspace, ExtensionContext, extensions, window, commands, Uri, TextDocument, TextDocumentChangeEvent, Range } from 'vscode';
 import {
   CommonLanguageClient,
   LanguageClientOptions,
@@ -21,6 +21,7 @@ import { getConflictingExtensions, showUninstallConflictsNotification } from './
 import { TelemetryErrorHandler, TelemetryOutputChannel } from './telemetry';
 import { createJSONSchemaStatusBarItem } from './schema-status-bar-item';
 import { initializeRecommendation } from './recommendation';
+import { sanitizeYamlIndentationTabs } from './tabSanitizer';
 
 export interface ISchemaAssociations {
   [pattern: string]: string[];
@@ -91,6 +92,30 @@ let client: CommonLanguageClient;
 
 const lsName = 'YAML Support';
 
+
+function createVirtualYamlDocument(document: TextDocument): TextDocument {
+  const sanitizedText = sanitizeYamlIndentationTabs(document.getText());
+  return {
+    ...document,
+    getText: (range?: Range) => {
+      if (range) {
+        return document.getText(range);
+      }
+      return sanitizedText;
+    },
+  };
+}
+
+function createSanitizedDidChange(event: TextDocumentChangeEvent): TextDocumentChangeEvent {
+  return {
+    ...event,
+    contentChanges: event.contentChanges.map((change) => ({
+      ...change,
+      text: sanitizeYamlIndentationTabs(change.text),
+    })),
+  };
+}
+
 export type LanguageClientConstructor = (
   name: string,
   description: string,
@@ -139,6 +164,14 @@ export function startClient(
     outputChannel: new TelemetryOutputChannel(outputChannel, runtime.telemetry),
     initializationOptions: {
       l10nPath,
+    },
+    middleware: {
+      didOpen: (document: TextDocument, next) => {
+        next(createVirtualYamlDocument(document));
+      },
+      didChange: (event, next) => {
+        next(createSanitizedDidChange(event));
+      },
     },
   };
 
