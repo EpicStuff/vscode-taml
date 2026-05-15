@@ -1,0 +1,20 @@
+{
+  "type": "object",
+  "properties": {
+    "outer": {
+      "type": "object",
+      "properties": {
+        "inner_key": {
+          "type": "string",
+          "description": "An inner string value"
+        }
+      },
+      "required": ["inner_key"]
+    },
+    "schema_only_top_key": {
+      "type": "string",
+      "description": "Top-level property only present in the schema; must be offered by schema-aware completion."
+    }
+  },
+  "required": ["outer"]
+}

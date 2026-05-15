@@ -9,12 +9,17 @@
 import { workspace, ExtensionContext, extensions, window, commands, Uri } from 'vscode';
 import {
   CommonLanguageClient,
+  DidChangeTextDocumentNotification,
+  DidOpenTextDocumentNotification,
+  DidSaveTextDocumentNotification,
   LanguageClientOptions,
+  Middleware,
   NotificationType,
   RequestType,
   RevealOutputChannelOn,
 } from 'vscode-languageclient';
 import { CUSTOM_SCHEMA_REQUEST, CUSTOM_CONTENT_REQUEST, SchemaExtensionAPI } from './schema-extension-api';
+import { convertIncrementalChange, convertLeadingTabs } from './tabConverter';
 import { joinPath } from './paths';
 import { getJsonSchemaContent, IJSONSchemaCache, JSONSchemaDocumentContentProvider } from './json-schema-content-provider';
 import { getConflictingExtensions, showUninstallConflictsNotification } from './extensionConflicts';
@@ -115,6 +120,81 @@ export function startClient(
   const telemetryErrorHandler = new TelemetryErrorHandler(runtime.telemetry, lsName, 4);
   const outputChannel = window.createOutputChannel(lsName);
   const l10nPath = context.asAbsolutePath('./dist/l10n');
+
+  // Replace leading-indentation tabs with spaces on every text-sync message so
+  // the server only ever sees tab-free YAML. The on-disk file is left alone;
+  // tabs in non-indentation positions (e.g. inside strings) are preserved.
+  // Substitution is 1:1 in characters so LSP positions remain valid both ways.
+  const tabConvertingMiddleware: Middleware = {
+    didOpen: async (document) => {
+      await client.sendNotification(DidOpenTextDocumentNotification.type, {
+        textDocument: {
+          uri: client.code2ProtocolConverter.asUri(document.uri),
+          languageId: document.languageId,
+          version: document.version,
+          text: convertLeadingTabs(document.getText()),
+        },
+      });
+    },
+    didChange: async (event) => {
+      const document = event.document;
+      const c2p = client.code2ProtocolConverter;
+
+      // Multi-line changes shift line numbers in ways that make per-line
+      // normalization fiddly; fall back to a converted full sync for those
+      // (less common) cases. This also handles rangeless full-replace events.
+      const isComplex = event.contentChanges.some(
+        (change) => !change.range || change.range.start.line !== change.range.end.line || change.text.includes('\n')
+      );
+      if (isComplex) {
+        await client.sendNotification(DidChangeTextDocumentNotification.type, {
+          textDocument: { uri: c2p.asUri(document.uri), version: document.version },
+          contentChanges: [{ text: convertLeadingTabs(document.getText()) }],
+        });
+        return;
+      }
+
+      // Single-line changes: emit one incremental sub-change per content change,
+      // then append a leading-whitespace normalization for each touched line.
+      // The normalization catches the case where a deletion exposes a
+      // previously-non-indentation tab as the new leading whitespace.
+      const contentChanges: { range?: unknown; rangeLength?: number; text: string }[] = [];
+      const touchedLines = new Set<number>();
+      for (const change of event.contentChanges) {
+        const line = change.range.start.line;
+        const prefix = document.lineAt(line).text.substring(0, change.range.start.character);
+        const firstSegmentJoinsIndentation = /^[ \t]*$/.test(prefix);
+        contentChanges.push({
+          range: c2p.asRange(change.range),
+          rangeLength: change.rangeLength,
+          text: convertIncrementalChange(change.text, firstSegmentJoinsIndentation),
+        });
+        touchedLines.add(line);
+      }
+      for (const line of touchedLines) {
+        const leading = /^[ \t]+/.exec(document.lineAt(line).text);
+        if (leading && leading[0].includes('\t')) {
+          contentChanges.push({
+            range: { start: { line, character: 0 }, end: { line, character: leading[0].length } },
+            rangeLength: leading[0].length,
+            text: leading[0].replace(/\t/g, ' '),
+          });
+        }
+      }
+
+      await client.sendNotification(DidChangeTextDocumentNotification.type, {
+        textDocument: { uri: c2p.asUri(document.uri), version: document.version },
+        contentChanges,
+      });
+    },
+    didSave: async (document) => {
+      await client.sendNotification(DidSaveTextDocumentNotification.type, {
+        textDocument: { uri: client.code2ProtocolConverter.asUri(document.uri) },
+        text: convertLeadingTabs(document.getText()),
+      });
+    },
+  };
+
   // Options to control the language client
   const clientOptions: LanguageClientOptions = {
     // Register the server for on disk and newly created YAML documents
@@ -137,6 +217,7 @@ export function startClient(
     revealOutputChannelOn: RevealOutputChannelOn.Never,
     errorHandler: telemetryErrorHandler,
     outputChannel: new TelemetryOutputChannel(outputChannel, runtime.telemetry),
+    middleware: tabConvertingMiddleware,
     initializationOptions: {
       l10nPath,
     },
