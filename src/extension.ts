@@ -19,7 +19,7 @@ import {
   RevealOutputChannelOn,
 } from 'vscode-languageclient';
 import { CUSTOM_SCHEMA_REQUEST, CUSTOM_CONTENT_REQUEST, SchemaExtensionAPI } from './schema-extension-api';
-import { convertLeadingTabs } from './tabConverter';
+import { convertIncrementalChange, convertLeadingTabs } from './tabConverter';
 import { joinPath } from './paths';
 import { getJsonSchemaContent, IJSONSchemaCache, JSONSchemaDocumentContentProvider } from './json-schema-content-provider';
 import { getConflictingExtensions, showUninstallConflictsNotification } from './extensionConflicts';
@@ -138,12 +138,34 @@ export function startClient(
     },
     didChange: async (event) => {
       const document = event.document;
+      const c2p = client.code2ProtocolConverter;
+      const contentChanges = event.contentChanges.map((change) => {
+        // Full-replace event (no range) — fall back to a converted full sync.
+        if (!change.range) {
+          return { text: convertLeadingTabs(change.text) };
+        }
+        // Determine whether the inserted text's first segment joins the line's
+        // indentation run. For single-line changes the post-change document
+        // still has the original prefix [0, startChar) on the affected line.
+        // For multi-line changes we conservatively treat the first segment as
+        // indentation only when the insertion starts at column 0.
+        const startsAtCol0 = change.range.start.character === 0;
+        const isSingleLine = change.range.start.line === change.range.end.line && !change.text.includes('\n');
+        const firstSegmentJoinsIndentation = isSingleLine
+          ? /^[ \t]*$/.test(document.lineAt(change.range.start.line).text.substring(0, change.range.start.character))
+          : startsAtCol0;
+        return {
+          range: c2p.asRange(change.range),
+          rangeLength: change.rangeLength,
+          text: convertIncrementalChange(change.text, firstSegmentJoinsIndentation),
+        };
+      });
       await client.sendNotification(DidChangeTextDocumentNotification.type, {
         textDocument: {
-          uri: client.code2ProtocolConverter.asUri(document.uri),
+          uri: c2p.asUri(document.uri),
           version: document.version,
         },
-        contentChanges: [{ text: convertLeadingTabs(document.getText()) }],
+        contentChanges,
       });
     },
     didSave: async (document) => {

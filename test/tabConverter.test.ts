@@ -4,7 +4,7 @@
  *--------------------------------------------------------------------------------------------*/
 
 import * as chai from 'chai';
-import { convertLeadingTabs } from '../src/tabConverter';
+import { convertIncrementalChange, convertLeadingTabs } from '../src/tabConverter';
 
 const expect = chai.expect;
 
@@ -58,5 +58,46 @@ describe('convertLeadingTabs', () => {
   it('handles multi-document YAML with tab indentation in both', () => {
     const input = '---\n\ta: 1\n---\n\tb: 2\n';
     expect(convertLeadingTabs(input)).to.equal('---\n a: 1\n---\n b: 2\n');
+  });
+});
+
+describe('convertIncrementalChange', () => {
+  it('returns the input unchanged when there are no tabs', () => {
+    expect(convertIncrementalChange('hello', true)).to.equal('hello');
+    expect(convertIncrementalChange('hello', false)).to.equal('hello');
+    expect(convertIncrementalChange('', true)).to.equal('');
+  });
+
+  it('converts the first segment when it joins the line indentation', () => {
+    expect(convertIncrementalChange('\tkey', true)).to.equal(' key');
+    expect(convertIncrementalChange('\t\tkey', true)).to.equal('  key');
+  });
+
+  it('leaves the first segment alone when it does not join indentation', () => {
+    expect(convertIncrementalChange('\tkey', false)).to.equal('\tkey');
+    expect(convertIncrementalChange('a\tb', false)).to.equal('a\tb');
+  });
+
+  it('always converts the leading whitespace of segments after a newline', () => {
+    expect(convertIncrementalChange('x\n\ty', false)).to.equal('x\n y');
+    expect(convertIncrementalChange('x\n\ty', true)).to.equal('x\n y');
+    expect(convertIncrementalChange('\tx\n\ty', true)).to.equal(' x\n y');
+  });
+
+  it('does not touch tabs that follow a non-whitespace character on a line', () => {
+    expect(convertIncrementalChange('key:\tvalue', true)).to.equal('key:\tvalue');
+    expect(convertIncrementalChange('a\n  b\tc', true)).to.equal('a\n  b\tc');
+  });
+
+  it('preserves total character length', () => {
+    const inputs: Array<[string, boolean]> = [
+      ['\tkey', true],
+      ['x\n\ty', false],
+      ['\tkey:\tval\n\tother', true],
+      ['plain text', false],
+    ];
+    for (const [input, joins] of inputs) {
+      expect(convertIncrementalChange(input, joins).length).to.equal(input.length);
+    }
   });
 });
