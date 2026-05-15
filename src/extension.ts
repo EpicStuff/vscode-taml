@@ -139,32 +139,51 @@ export function startClient(
     didChange: async (event) => {
       const document = event.document;
       const c2p = client.code2ProtocolConverter;
-      const contentChanges = event.contentChanges.map((change) => {
-        // Full-replace event (no range) — fall back to a converted full sync.
-        if (!change.range) {
-          return { text: convertLeadingTabs(change.text) };
-        }
-        // Determine whether the inserted text's first segment joins the line's
-        // indentation run. For single-line changes the post-change document
-        // still has the original prefix [0, startChar) on the affected line.
-        // For multi-line changes we conservatively treat the first segment as
-        // indentation only when the insertion starts at column 0.
-        const startsAtCol0 = change.range.start.character === 0;
-        const isSingleLine = change.range.start.line === change.range.end.line && !change.text.includes('\n');
-        const firstSegmentJoinsIndentation = isSingleLine
-          ? /^[ \t]*$/.test(document.lineAt(change.range.start.line).text.substring(0, change.range.start.character))
-          : startsAtCol0;
-        return {
+
+      // Multi-line changes shift line numbers in ways that make per-line
+      // normalization fiddly; fall back to a converted full sync for those
+      // (less common) cases. This also handles rangeless full-replace events.
+      const isComplex = event.contentChanges.some(
+        (change) => !change.range || change.range.start.line !== change.range.end.line || change.text.includes('\n')
+      );
+      if (isComplex) {
+        await client.sendNotification(DidChangeTextDocumentNotification.type, {
+          textDocument: { uri: c2p.asUri(document.uri), version: document.version },
+          contentChanges: [{ text: convertLeadingTabs(document.getText()) }],
+        });
+        return;
+      }
+
+      // Single-line changes: emit one incremental sub-change per content change,
+      // then append a leading-whitespace normalization for each touched line.
+      // The normalization catches the case where a deletion exposes a
+      // previously-non-indentation tab as the new leading whitespace.
+      const contentChanges: { range?: unknown; rangeLength?: number; text: string }[] = [];
+      const touchedLines = new Set<number>();
+      for (const change of event.contentChanges) {
+        const line = change.range.start.line;
+        const prefix = document.lineAt(line).text.substring(0, change.range.start.character);
+        const firstSegmentJoinsIndentation = /^[ \t]*$/.test(prefix);
+        contentChanges.push({
           range: c2p.asRange(change.range),
           rangeLength: change.rangeLength,
           text: convertIncrementalChange(change.text, firstSegmentJoinsIndentation),
-        };
-      });
+        });
+        touchedLines.add(line);
+      }
+      for (const line of touchedLines) {
+        const leading = /^[ \t]+/.exec(document.lineAt(line).text);
+        if (leading && leading[0].includes('\t')) {
+          contentChanges.push({
+            range: { start: { line, character: 0 }, end: { line, character: leading[0].length } },
+            rangeLength: leading[0].length,
+            text: leading[0].replace(/\t/g, ' '),
+          });
+        }
+      }
+
       await client.sendNotification(DidChangeTextDocumentNotification.type, {
-        textDocument: {
-          uri: c2p.asUri(document.uri),
-          version: document.version,
-        },
+        textDocument: { uri: c2p.asUri(document.uri), version: document.version },
         contentChanges,
       });
     },
