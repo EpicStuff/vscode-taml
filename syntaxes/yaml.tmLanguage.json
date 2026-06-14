@@ -158,7 +158,7 @@
 			"name": "punctuation.definition.block.sequence.item.yaml"
 		},
 		"comment": {
-			"begin": "(?:(^[ \\t]*)|[ \\t]+)(?=#\\p{Print}*$)",
+			"begin": "(?:(^[ \\t]*)|[ \\t]+)(?=#[\\p{Print}\\t]*$)",
 			"beginCaptures": {
 				"1": {
 					"name": "punctuation.whitespace.comment.leading.yaml"
