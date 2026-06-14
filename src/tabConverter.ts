@@ -11,6 +11,16 @@ export function convertLeadingTabs(text: string): string {
   return text.replace(/^[ \t]+/gm, (run) => run.replace(/\t/g, ' '));
 }
 
+// Replace each run of `tabSize` leading spaces with one tab. Used to undo the
+// formatter's space-only output when the editor is configured to use tabs.
+// Sub-tab remainders (fewer than `tabSize` trailing spaces) are kept as
+// spaces so the original column position is preserved.
+export function convertLeadingSpacesToTabs(text: string, tabSize: number): string {
+  if (tabSize <= 0) return text;
+  const group = new RegExp(' {' + tabSize + '}', 'g');
+  return text.replace(/^[ \t]+/gm, (run) => run.replace(group, '\t'));
+}
+
 // Convert the `text` portion of one incremental LSP change event. Only tabs
 // that land in an indentation position are replaced.
 //

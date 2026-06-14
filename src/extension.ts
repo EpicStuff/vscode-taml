@@ -6,7 +6,7 @@
  *--------------------------------------------------------------------------------------------*/
 'use strict';
 
-import { workspace, ExtensionContext, extensions, window, commands, Uri } from 'vscode';
+import { workspace, ExtensionContext, extensions, window, commands, Uri, TextEdit } from 'vscode';
 import {
   CommonLanguageClient,
   DidChangeTextDocumentNotification,
@@ -19,7 +19,7 @@ import {
   RevealOutputChannelOn,
 } from 'vscode-languageclient';
 import { CUSTOM_SCHEMA_REQUEST, CUSTOM_CONTENT_REQUEST, SchemaExtensionAPI } from './schema-extension-api';
-import { convertIncrementalChange, convertLeadingTabs } from './tabConverter';
+import { convertIncrementalChange, convertLeadingSpacesToTabs, convertLeadingTabs } from './tabConverter';
 import { joinPath } from './paths';
 import { getJsonSchemaContent, IJSONSchemaCache, JSONSchemaDocumentContentProvider } from './json-schema-content-provider';
 import { getConflictingExtensions, showUninstallConflictsNotification } from './extensionConflicts';
@@ -192,6 +192,20 @@ export function startClient(
         textDocument: { uri: client.code2ProtocolConverter.asUri(document.uri) },
         text: convertLeadingTabs(document.getText()),
       });
+    },
+    // The server runs prettier without `useTabs`, so its formatted output
+    // always uses spaces. When the editor is in tab-indent mode, convert
+    // leading `tabSize`-sized space groups in each returned edit back to
+    // tabs so Format Document doesn't silently re-indent the file.
+    provideDocumentFormattingEdits: async (document, options, token, next) => {
+      const edits = await next(document, options, token);
+      if (!edits || options.insertSpaces) return edits;
+      return edits.map((edit) => new TextEdit(edit.range, convertLeadingSpacesToTabs(edit.newText, options.tabSize)));
+    },
+    provideDocumentRangeFormattingEdits: async (document, range, options, token, next) => {
+      const edits = await next(document, range, options, token);
+      if (!edits || options.insertSpaces) return edits;
+      return edits.map((edit) => new TextEdit(edit.range, convertLeadingSpacesToTabs(edit.newText, options.tabSize)));
     },
   };
 
